@@ -39,7 +39,7 @@ for my $name (@names) {
     
     my $c = Cache::BDB->new(%options);
     isa_ok($c, 'Cache::BDB');
-    is($c->set(1, 'foo'),'');
+    is($c->set(1, 'foo'),1);
     is($c->count(), 1);
     undef $c;
 }

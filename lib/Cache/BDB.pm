@@ -1,18 +1,14 @@
 package Cache::BDB;
 
-# $Id: BDB.pm,v 1.3 2005/12/13 04:25:14 jrotenberg Exp $
-
 use strict;
 use warnings;
 
 use BerkeleyDB;
 use Storable;
-use Data::Dumper;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use constant DEFAULT_DB_TYPE => 'Hash';
-my $__meta_version = '001';
 
 =pod
 
@@ -38,6 +34,15 @@ Cache::BDB - An object caching wrapper around BerkeleyDB
  $cache->set(1, \%some_hash);
  $cache->set('foo', 'bar');
  $cache->set(20, $obj, 10);
+ 
+ $cache->add(21, 'whatever'); # works, nothing with the key '21' set yet.
+ $cache->add(21, 'coffeepot'); # fails, can only add() something that hasn't
+                               # yet been set
+
+ $cache->replace(21, 'shoelace'); # replaces the data 'whatever' with 
+                                  # 'shoelace'
+ $cache->replace(7, 'tattoo'); # fails key/value pair was never set() or 
+                               # add()ed previously
 
  my $h = $cache->get(1); # $h and \%some_hash contain the same data
  my $bar = $cache->get('foo'); # $bar eq 'bar';
@@ -60,11 +65,19 @@ add, retrieve, and remove objects. The main advantage over other
 caching modules is performance. I've attempted to stick with a
 B<Cache::Cache> like interface as much as possible.
 
+=head1 DEPENDENCIES
+
+I've been developing using a very recent version of Berkeley DB
+(v4.4.20) and BerkeleyDB (v0.27). I'm pretty sure that most of the
+functionality the module relies on is available in Berkeley DB version
+3 and higher, but so far I have not tested with older versions. I'm
+open to making version specific concessions if necessary.
+
 =head1 PERFORMANCE
 
 The intent of this module is to supply great performance with a
 reasonably feature rich API. There is no way this module can compete
-with, say, using BerkeleyDB directly, but if you don't need any kind
+with, say, using BerkeleyDB directly, and if you don't need any kind
 of expiration, automatic purging, etc, that will more than likely be
 much faster. If you'd like to compare the speed of some other caching
 modules, have a look at
@@ -73,7 +86,7 @@ patch which adds Cache::BDB to the benchmark.
 
 =head1 LOCKING
 
-All cache Berkeley DB environments are opened with the DB_INIT_CDB
+All Cache::BDB environments are opened with the DB_INIT_CDB
 flag. This enables multiple-reader/single-writer locking handled
 entirely by the Berkeley DB internals at either the database or
 environment level. See
@@ -107,9 +120,16 @@ for each cache.
 
 If you want to tell B<Cache::BDB> exactly which file to use for your
 cache, specify it here. This paramater is required if you plan to use
-the env_lock option and/or if you want to have multiple databases in
-single file. If unspecified, B<Cach::BDB> will create its database file using
-the B<namespace>.
+the env_lock option and/or if you want to have multiple logical
+databases (namespaces) in single physical file. If unspecified,
+B<Cach::BDB> will create its database file using the
+B<namespace>. B<cache_file> should be relative to your cache_root, not
+fully-qualified, i.e.  
+
+ my %options = ( cache_root => '/some/location/for/caching/', 
+                 cache_file => 'whatever.db' );
+
+This gives you /some/location/for/caching/whatever.db.
 
 =item * namespace
 
@@ -117,6 +137,18 @@ Your B<namespace> tells B<Cache::BDB> where to store cache data under
 the B<cache_root> if no B<cache_file> is specified or what to call the
 database in the multi-database file if B<cache_file> is specified. It
 is a required parameter.
+
+=item * type
+
+Cache::BDB allows you to select the type of Berkeley DB storage
+mechanism to use. Your choices are Hash, Btree, and Recno. Queue isn't
+supported. I haven't tested the three supported types extensively. The
+default, if unspecified, is Hash, and this is probably good enough for
+most applications. Note that if a cache is created as one type it must
+remain that type. Cache::BDB will automatically decide if the cache
+already exists, and if it does it will ignore your B<type>
+argument. For more info, see
+http://www.sleepycat.com/docs/ref/am_conf/intro.html.
 
 =item * env_lock
 
@@ -137,8 +169,12 @@ objects never expire. See B<set> to enable a per-object value.
 
 =item * auto_purge_interval
 
-Time (in seconds) that the cached will be purged by one or both of the
-B<auto_purge> types (get/set). If set to 0, auto purge is disabled.
+Time (in seconds) that the cached objects will be purged by one or
+both of the B<auto_purge> types (get/set). If set to 0, auto purge is
+disabled. Note, of course, that objects won't actually be purged until
+some event actually takes place that will call purge (set or get), so
+if this is set to 300 but no gets or sets are called for more than 300
+seconds, the items haven't actually been purged yet.
 
 =item * auto_purge_on_set
 
@@ -185,18 +221,17 @@ sub new {
 
     my $t = time();
 
-    my $home = $params{cache_root};
-
-    unless(-d $home) {
-	unless(mkdir($home)) {
-	    die "cache_root unavailable: $home $!";
+    my $cache_root = $params{cache_root};
+    unless(-d $cache_root) {
+	unless(mkdir($cache_root)) {
+	    die "cache_root unavailable: $cache_root $!";
 	}
     }
 
     my $fname = $params{cache_file} || join('.', $params{namespace}, "db");
 
     my $env = BerkeleyDB::Env->new(
-				   -Home => $home,
+				   -Home => $cache_root,
 				   -Flags => 
 				   (DB_INIT_CDB | DB_CREATE | DB_INIT_MPOOL),
 				   -ErrFile => *STDERR,
@@ -207,14 +242,13 @@ sub new {
       or die "Unable to create env: $! $BerkeleyDB::Error";
 
     my ($db);
-
     if(-e $fname) { 
       # cache file(s) exist, connect with Unknown
       $db = BerkeleyDB::Unknown->new(
 			  -Env => $env,
-			  -Subname => $params{namespace},	     
+			  -Subname => $params{namespace},
 			  -Filename => $fname,
-			  -Pagesize => 8192,
+#			  -Pagesize => 8192,
 			  )
 	or die "Unable to open db: $! $BerkeleyDB::Error";
 
@@ -222,15 +256,16 @@ sub new {
     else {
       my $type = join('::', 'BerkeleyDB', ($params{type} &&
 					   ($params{type} eq 'Btree' ||
-					    $params{type} eq 'Hash')) ?
+					    $params{type} eq 'Hash'  ||
+					   $params{type} eq 'Recno')) ?
 		      $params{type} : DEFAULT_DB_TYPE);
 
       $db = $type->new(
 		       -Env => $env,
-		       -Subname => $params{namespace},	     
+		       -Subname => $params{namespace},
 		       -Filename => $fname,
 		       -Flags => DB_CREATE,
-		       -Pagesize => 8192,
+#		       -Pagesize => 8192,
 		      )
 	or die "Unable to open db: $! $BerkeleyDB::Error";
     }
@@ -238,12 +273,18 @@ sub new {
     $db->filter_store_value( sub { $_ = Storable::freeze($_) });
     $db->filter_fetch_value( sub { $_ = Storable::thaw($_) });
 
+#    $db->filter_store_value( sub { $_ = YAML::Syck::Dump($_) });
+#    $db->filter_fetch_value( sub { $_ = YAML::Syck::Load($_) });
+
+#    $db->filter_store_value( sub { $_ = XMLout($_) });
+#    $db->filter_fetch_value( sub { $_ = XMLin($_) });
+
     my $self = {
 		# private stuff
 		__env => $env,
 		__db => $db,
 		__last_purge_time => $t,
-		
+
 		# expiry/purge
 		default_expires_in => $params{default_expires_in} || 0,
 		auto_purge_interval => $params{auto_purge_interval} || 0,
@@ -344,14 +385,14 @@ sub auto_purge_on_get {
 =item B<set>($key, $value, [$seconds]) 
 
 Store an item ($value) with the associated $key. Time to live (in
-seconds) can be optionally set with a third argument.
+seconds) can be optionally set with a third argument. Returns true on success.
 
 =cut
 
 sub set {
     my ($self, $key, $value, $ttl) = @_;
 
-    return undef unless ($key && $value);
+    return 0 unless ($key && $value);
     my $rv;
     my $now = time();
 
@@ -364,7 +405,7 @@ sub set {
 
     $ttl ||= $self->{default_expires_in};
     my $expires = ($ttl) ? $now + $ttl : 0;
-    
+
     my $data = {__expires => $expires,
 		__set_time => $now, 
 		__last_access_time => $now,
@@ -373,14 +414,39 @@ sub set {
 
     $rv = $self->{__db}->db_put($key, $data);
 
-    return $rv;
+    return $rv ? 0 : 1;
+}
+
+=item B<add>($key, $value, [$seconds])
+
+Only B<set> in the cache if the key doesn't already exist.
+
+=cut 
+
+sub add {
+  my ($self, $key, $value, $ttl) = @_;
+
+  return $self->get($key) ? 0 : $self->set($key, $value, $ttl);
+}
+
+=item B<replace>($key, $value, [$seconds])
+
+Only B<set> in the cache if the key does exist.
+
+=cut
+
+sub replace {
+  my ($self, $key, $value, $ttl) = @_;
+
+  return $self->get($key) ? $self->set($key, $value, $ttl) : 0;
 }
 
 =item B<get>($key)
 
-Locate and return the data associated with $key. Returns undef if the
-data doesn't exist. If B<auto_purge_on_get> is enabled, the cache will
-be purged before attempting to locate the item.
+Locate and return the data associated with $key. Returns the object
+associated with $key or undef if the data doesn't exist. If
+B<auto_purge_on_get> is enabled, the cache will be purged before
+attempting to locate the item.
 
 =cut
 
@@ -400,6 +466,7 @@ sub get {
 
     my $rv = $self->{__db}->db_get($key, $data);
     return undef if $rv == DB_NOTFOUND;
+    return undef unless $data->{__data};
 
     if($self->__is_expired($data, $t)) {
       $self->remove($key);
@@ -407,7 +474,7 @@ sub get {
     } 
     else {
       # this is way too slow.
-      #$self->_update_access_time($key, $data, $t); 
+#      $self->_update_access_time($key, $data, $t); 
 
       return $data->{__data};
     }
@@ -426,7 +493,8 @@ sub _update_access_time {
 
 =item B<remove>($key)
 
-Removes the cache element specified by $key if it exists.
+Removes the cache element specified by $key if it exists. Returns true
+for success.
 
 =cut
 
@@ -436,12 +504,12 @@ sub remove {
     my $rv;
     my $v = '';
     $rv = $self->{__db}->db_del($key);
-    return $rv;
+    return $rv ? 0 : 1;
 }
 
 =item B<clear>()
 
-Completely clear out the cache.
+Completely clear out the cache. Returns true for success.
 
 =cut
 
@@ -450,7 +518,8 @@ sub clear {
     my $count = 0;
     my $rv;
     $rv = $self->{__db}->truncate($count);
-    return $count;
+    return $rv ? 0 : $count;
+
 }
 
 =item B<count>
@@ -496,7 +565,7 @@ sub size {
 
 =item B<purge>
 
-Purge expired items from the cache.
+Purge expired items from the cache. Returns the number of items purged.
 
 =cut
 
@@ -508,7 +577,7 @@ sub purge {
     my $count = 0;
 
     my $cursor = $self->{__db}->db_cursor(DB_WRITECURSOR);
-    
+
     while($cursor->c_get($k, $v, DB_NEXT) == 0) {
 	if($self->__is_expired($v, $t)) {
 	    $cursor->c_del();
@@ -541,10 +610,10 @@ sub is_expired {
 
     my $data;
     my $t = time();
-    return undef unless $key;
+    return 0 unless $key;
     my $rv = $self->{__db}->db_get($key, $data);
 
-    return undef unless $data;
+    return 0 unless $data;
     return $self->__is_expired($data, $t);
 }
 
