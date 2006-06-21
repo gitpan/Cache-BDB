@@ -5,10 +5,11 @@ use warnings;
 
 use BerkeleyDB;
 use Storable;
+use File::Path qw(mkpath);
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
-use constant DEFAULT_DB_TYPE => 'Hash';
+use constant DEFAULT_DB_TYPE => 'Btree';
 
 =pod
 
@@ -214,22 +215,26 @@ sub new {
     my ($proto, %params) = @_;
     my $class = ref($proto) || $proto;
 
-    die "Cache::BDB require Berkeley DB version 3 or greater"
+       die "Cache::BDB requires Berkeley DB version 3 or greater"
 	unless $BerkeleyDB::db_version >= 3;
+    
+    # can't do anything without at least these params
     die "cache_root not specified" unless($params{cache_root});
     die "namespace not specified" unless($params{namespace});
 
-    my $t = time();
-
     my $cache_root = $params{cache_root};
     unless(-d $cache_root) {
-	unless(mkdir($cache_root)) {
-	    die "cache_root unavailable: $cache_root $!";
-	}
+      eval {
+	mkpath($cache_root, 0, 0777);
+      };
+      if($@) {
+	die "cache_root '$cache_root' unavailable: $@";
+      }
     }
 
+    # if no db filename is explicity given, use the namespace to name the file
     my $fname = $params{cache_file} || join('.', $params{namespace}, "db");
-
+    
     my $env = BerkeleyDB::Env->new(
 				   -Home => $cache_root,
 				   -Flags => 
@@ -239,51 +244,69 @@ sub new {
 				   $params{env_lock} ? DB_CDB_ALLDB : 0,
 				   -Verbose => 1,
 				  ) 
-      or die "Unable to create env: $! $BerkeleyDB::Error";
+      or die "Unable to create env: $BerkeleyDB::Error";
 
-    my ($db);
-    if(-e $fname) { 
-      # cache file(s) exist, connect with Unknown
-      $db = BerkeleyDB::Unknown->new(
-			  -Env => $env,
-			  -Subname => $params{namespace},
-			  -Filename => $fname,
-#			  -Pagesize => 8192,
-			  )
-	or die "Unable to open db: $! $BerkeleyDB::Error";
+    my $db;
+    my $type = join('::', 'BerkeleyDB', ($params{type} &&
+					 ($params{type} eq 'Btree' ||
+					  $params{type} eq 'Hash'  ||
+					  $params{type} eq 'Recno')) ?
+		    $params{type} : DEFAULT_DB_TYPE);
+    
+    # there are three possibilities here:
 
-    }
-    else {
+    # 1) neither the physical nor the logical databases exist
+    if(!-e join('/', $cache_root, $fname)) { 
       my $type = join('::', 'BerkeleyDB', ($params{type} &&
 					   ($params{type} eq 'Btree' ||
 					    $params{type} eq 'Hash'  ||
-					   $params{type} eq 'Recno')) ?
+					    $params{type} eq 'Recno')) ?
 		      $params{type} : DEFAULT_DB_TYPE);
-
+      
       $db = $type->new(
 		       -Env => $env,
 		       -Subname => $params{namespace},
 		       -Filename => $fname,
 		       -Flags => DB_CREATE,
 #		       -Pagesize => 8192,
-		      )
-	or die "Unable to open db: $! $BerkeleyDB::Error";
+		      );
+      die "Unable to open $fname: $! $BerkeleyDB::Error" unless $db;
+
+    }
+    else {
+      # 2) the physical and logical databases exist
+      $db = BerkeleyDB::Unknown->new(
+				     -Env => $env,
+				     -Subname => $params{namespace},
+				     -Filename => $fname,
+				     #-Pagesize => 8192,
+				     );
+
+      # 3) the physical file exists but the logical database does not
+      unless($db) {
+	
+	$db = $type->new(
+			 -Env => $env,
+			 -Subname => $params{namespace},
+			 -Filename => $fname,
+			 -Flags => DB_CREATE,
+			 #		       -Pagesize => 8192,
+			);
+      }
+            
+      die "Unable to open $fname: $! $BerkeleyDB::Error" unless $db;
+
     }
 
+    # eventually these should support user defined subs and/or options as well
     $db->filter_store_value( sub { $_ = Storable::freeze($_) });
     $db->filter_fetch_value( sub { $_ = Storable::thaw($_) });
-
-#    $db->filter_store_value( sub { $_ = YAML::Syck::Dump($_) });
-#    $db->filter_fetch_value( sub { $_ = YAML::Syck::Load($_) });
-
-#    $db->filter_store_value( sub { $_ = XMLout($_) });
-#    $db->filter_fetch_value( sub { $_ = XMLin($_) });
 
     my $self = {
 		# private stuff
 		__env => $env,
 		__db => $db,
-		__last_purge_time => $t,
+		__last_purge_time => time(),
 
 		# expiry/purge
 		default_expires_in => $params{default_expires_in} || 0,
@@ -299,8 +322,8 @@ sub new {
 
 		# file/namespace
 		namespace => $params{namespace},
-		cache_file => $fname,
 		cache_root => $params{cache_root},
+		cache_file => $fname,
 
 	       };
 
@@ -396,12 +419,14 @@ sub set {
     my $rv;
     my $now = time();
 
-    my $interval = $self->{auto_purge_interval};
-    if($self->{auto_purge_on_set} && 
-       $now > ($self->{__last_purge_time} + $interval)) {
-	$self->purge();
-	$self->{__last_purge_time} = $now;
-    }
+    
+    if($self->{auto_purge_on_set}) {
+       my $interval = $self->{auto_purge_interval};    
+       if($now > ($self->{__last_purge_time} + $interval)) {
+	 $self->purge();
+	 $self->{__last_purge_time} = $now;
+       }
+     }
 
     $ttl ||= $self->{default_expires_in};
     my $expires = ($ttl) ? $now + $ttl : 0;
@@ -457,13 +482,15 @@ sub get {
     my $t = time();
 
     my $data;
-    my $interval = $self->{auto_purge_interval};
-    if($self->{auto_purge_on_get} && 
-       $t > ($self->{__last_purge_time} + $interval)) {
+
+    if($self->{auto_purge_on_get}) {
+      my $interval = $self->{auto_purge_interval};
+      if($t > ($self->{__last_purge_time} + $interval)) {
 	$self->purge();
 	$self->{__last_purge_time} = $t;
+      }
     }
-
+    
     my $rv = $self->{__db}->db_get($key, $data);
     return undef if $rv == DB_NOTFOUND;
     return undef unless $data->{__data};
@@ -572,12 +599,13 @@ Purge expired items from the cache. Returns the number of items purged.
 sub purge {
     my $self = shift;
 
-    my ($k, $v) = ('','');
+
     my $t = time();
     my $count = 0;
 
     my $cursor = $self->{__db}->db_cursor(DB_WRITECURSOR);
 
+    my ($k, $v) = ('','');
     while($cursor->c_get($k, $v, DB_NEXT) == 0) {
 	if($self->__is_expired($v, $t)) {
 	    $cursor->c_del();
@@ -679,6 +707,7 @@ L<http://search.cpan.org/dist/Cache-BDB>
 =head1 ACKNOWLEDGEMENTS
 
 Baldur Kristinsson
+Sandy Jensen
 
 =head1 COPYRIGHT & LICENSE
 
@@ -690,5 +719,6 @@ under the same terms as Perl itself.
 
 
 1;
+
 
 __END__

@@ -1,7 +1,6 @@
 use Test::More tests => 52;
 use Data::Dumper;
 use Cache::BDB;
-#use BerkeleyDB;
 
 my %options = (
 	cache_root => './t/02',

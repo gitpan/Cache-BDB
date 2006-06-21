@@ -20,7 +20,7 @@ use strict;
 srand(1);
 
 # Number of runs to perform
-my $Runs = 5;
+my $Runs = 1;
 
 # Maximum number of values to generate to store in cache
 my $MaxVals = 1000;
@@ -98,11 +98,6 @@ sub CheckBin {
 
 # Packages to run through
 my @Packages = (
-		CC6_CacheBDBStorable => [ 'bin', 
-			      cache_root => "/tmp",
-			       namespace => "testcache_cache_bdb",
-			 ],
-
 
 		CC5_CacheCacheBerkeleyDBStorable => [ 'complex',
 						      {
@@ -117,7 +112,7 @@ my @Packages = (
 				 namespace => "testcache_filecache",
 				 }
 				 ],
-		
+	
 		CC6_CacheBDBStorable => [ 'complex', 
 			      cache_root => "/tmp",
 			       namespace => "testcache_cache_bdb",
@@ -129,6 +124,7 @@ my @Packages = (
 				      'compress_threshold' => 100000,
 				     }
 			  ],
+
 );
 
 #----- Now do runs
@@ -190,8 +186,7 @@ while (my ($Package, $PackageOpts) = splice @Packages, 0, 2) {
       # Store keys
       my $t0 = [gettimeofday];
       for (my $i = 0; $i < $NSetItems; $i++) {
-#        my $k = "abc" . ($i * 103) . "defg";
-        my $k =  ($i * 103);
+        my $k = "abc" . ($i * 103) . "defg";
         my $x = $i % $MaxVals;
         $c->set($k, $DataSet->[$x]);
         $StoreData{$k} = $x;
@@ -208,8 +203,7 @@ while (my ($Package, $PackageOpts) = splice @Packages, 0, 2) {
           $k = $SetKeys[rand(@SetKeys)];
           $GetRead++;
         } else {
-#          $k = "abcd" . ($i * 103) . "efg";
-          $k = ($i * 103);
+          $k = "abcd" . ($i * 103) . "efg";
         }
         my $y = $c->get($k);
         if (defined $y) {
@@ -234,8 +228,7 @@ while (my ($Package, $PackageOpts) = splice @Packages, 0, 2) {
             $k = $SetKeys[rand(@SetKeys)];
             $MixRead++;
           } else {
-        #    $k = "abcd" . ($i * 103) . "efg";
-            $k = ($i * 103);
+            $k = "abcd" . ($i * 103) . "efg";
           }
           my $y = $c->get($k);
           if (defined $y) {

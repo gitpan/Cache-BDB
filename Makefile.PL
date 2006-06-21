@@ -12,6 +12,7 @@ WriteMakefile(
         'Test::More' => 0,
 	'BerkeleyDB' => '0.27',	  
 	'Storable' => 0,
+        'File::Path' => 0,
     },
     dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean               => { FILES => 'Cache-BDB-*' },
