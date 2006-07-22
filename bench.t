@@ -112,6 +112,11 @@ my @Packages = (
 				 namespace => "testcache_filecache",
 				 }
 				 ],
+
+		CC6_CacheFileStorable => [ 'complex', 
+			      cache_root => "/tmp",
+			       namespace => "testcache_file",
+			 ],
 	
 		CC6_CacheBDBStorable => [ 'complex', 
 			      cache_root => "/tmp",
@@ -547,3 +552,13 @@ sub name { return "Cache::BDB Storable"; }
 
 1;
 
+package CC6_CacheFileStorable;
+
+use Cache::File;
+use base 'Cache::File';
+
+sub name { return "Cache::File Storable"; }
+
+sub get { shift->thaw(@_); }
+sub set { shift->freeze(@_); }
+1;

@@ -1,5 +1,5 @@
 use Time::HiRes qw(tv_interval gettimeofday);
-use Test::More qw(no_plan);
+use Test::More skip_all => "need to deal with forking tests";
 use Cache::BDB;
 use strict;
 
@@ -22,10 +22,6 @@ my %options2 = (
 	env_lock => 1,
 	default_expires_in => 100,
     );	
-
-SKIP : { 
-
-skip "need to work on handling fork()";
 
 my @pids = ();
 for(my $i = 0; $i <= $kids; $i++) {
@@ -95,4 +91,3 @@ sub run_child {
     exit;
 }
 
-}

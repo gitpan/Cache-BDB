@@ -1,5 +1,22 @@
 Revision history for Cache-BDB
 
+0.04    2006-07-14
+	Added support for db->compact, freeing unused space from cache
+	db files. Requires BerkeleyDB.pm 0.29 and Berkeley DB 4.4.
+
+	Added delete alias for remove. 
+
+	Added get_bulk() method.
+
+	Added close() method.
+
+	Enabled size() method if Devel::Size is available.
+
+	Added disable_auto_purge option.
+
+	Separated pod into BDB.pod.
+
+
 0.03    2006-06-21
         Changed default type to Btree in preparation for the addition of
 	DB->compact to the BerkeleyDB perl wrapper. Chances are good I'll

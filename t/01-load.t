@@ -1,4 +1,4 @@
-use Test::More tests => 39;
+use Test::More tests => 73;
 use Cwd;
 use File::Path qw(rmtree);
 
@@ -30,6 +30,7 @@ my $f = Cache::BDB->new(cache_root => join('/',
 					   $$,
 					   'test'),
 			namespace => 'whatever');
+
 ok(-e join('/', 
 	   $cache_root_base,
 	   'Cache::BDB',
@@ -39,22 +40,22 @@ ok(-e join('/',
 
 
 # verify that we can create a single file with multiple dbs
-my @names = qw(one two three four five six);
+my @names = qw(one two three four five six seven eight nine ten);
 
 for my $name (@names) {
-    my %options = (
-	cache_root => $cache_root_base,
-	cache_file => "one.db",
-	namespace => $name,
-	default_expires_in => 10,
+  my %options = (
+		 cache_root => $cache_root_base,
+		 namespace => $name,
+		 default_expires_in => 10,
     );	
 
-    #diag("opening one.db with namespace $name");
+    $options{type} = 'Hash' if $name eq 'two';
+#    diag("\ncreating namespace $name in db one.db");
     my $c = Cache::BDB->new(%options);
     isa_ok($c, 'Cache::BDB');
-    is($c->set(1, $name),1);
+    is($c->set('namespace', $name),1);
     is($c->count(), 1);
-    undef $c;
+    is($c->close(), undef);
 }
 
 # verify that those databases can be connected to and contain what we
@@ -62,17 +63,17 @@ for my $name (@names) {
 
 for my $name (@names) {
     my %options = (
-	cache_root => './t/01',
-	cache_file => "one.db",
+	cache_root => $cache_root_base,
 	namespace => $name,
 	default_expires_in => 10,
     );	
-    
+
+ #   diag("connecting to namespace $name in db one.db");
+    diag("expect a warning here") if $name eq 'two';
     my $c = Cache::BDB->new(%options);
     isa_ok($c, 'Cache::BDB');
-    is($c->get(1), $name);
+    is($c->get('namespace'), $name);
     is($c->count(), 1);
     undef $c;
 }
-
 
